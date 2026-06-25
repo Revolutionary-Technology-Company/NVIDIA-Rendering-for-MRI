@@ -1,57 +1,55 @@
 #!/bin/bash
 # ==============================================================================
-# Revolutionary Technology Company - MRI Pipeline Automation Daemon
-# Monitors incoming spool volumes and executes the multicore processing 
-# stack once a scanner finishes uploading a sequence/series volume.
+# Revolutionary Technology Company - MRI Pipeline Automation Daemon with Metrics Hooks
+# Monitors incoming spool volumes, runs processing pipelines, and writes metrics.json.
 # ==============================================================================
 
-# Configuration Constants
 WATCH_DIR="/workspace/incoming_dicom"
 PROCESSED_DIR="/workspace/processed_output"
 PIPELINE_SCRIPT="/workspace/pipeline/pipelines/reconstruct_mri_multicore.py"
+METRICS_SCRIPT="/workspace/pipeline/pipelines/track_metrics.py"
 SETTLE_TIME_SECONDS=5
 LOG_FILE="/var/log/mri_pipeline_daemon.log"
 
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] 🚀 Starting MRI Pipeline Watch Daemon..." | tee -a "$LOG_FILE"
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] Watching directory: $WATCH_DIR" | tee -a "$LOG_FILE"
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] 🚀 Starting Auditable MRI Pipeline Watch Daemon..." | tee -a "$LOG_FILE"
 
-# Ensure runtime directories exist
-mkdir -p "$WATCH_DIR"
-mkdir -p "$PROCESSED_DIR"
+mkdir -p "$WATCH_DIR" "$PROCESSED_DIR"
 
 while true; do
-    # Check if there are any files inside the watch directory
     if [ "$(ls -A "$WATCH_DIR" 2>/dev/null)" ]; then
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] 📥 Incoming data detected. Waiting for transmission to finish..." >> "$LOG_FILE"
-        
-        # Settle-down verification loop: Measure folder sizes until writing halts
         INITIAL_SIZE=$(du -sb "$WATCH_DIR" | awk '{print $1}')
         sleep "$SETTLE_TIME_SECONDS"
         CURRENT_SIZE=$(du -sb "$WATCH_DIR" | awk '{print $1}')
         
         if [ "$INITIAL_SIZE" -eq "$CURRENT_SIZE" ] && [ "$CURRENT_SIZE" -gt 0 ]; then
-            echo "[$(date '+%Y-%m-%d %H:%M:%S')] ✅ Series transfer complete (Folder size stabilized at $CURRENT_SIZE bytes)." | tee -a "$LOG_FILE"
-            echo "[$(date '+%Y-%m-%d %H:%M:%S')] ⚡ Passing volume to NVIDIA RTX 6000 Multicore Engine..." | tee -a "$LOG_FILE"
+            # Count the files precisely before sending to the processing array
+            TOTAL_FILES=$(ls -1 "$WATCH_DIR" | wc -l)
             
-            # Execute the high-throughput Python engine inside the host context
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] ✅ Volume stabilized. Processing $TOTAL_FILES files..." >> "$LOG_FILE"
+            
+            # Start tracking the high-precision processing duration
+            START_TIME=$(date +%s.%N)
+            
             python3 "$PIPELINE_SCRIPT" "$WATCH_DIR" "$PROCESSED_DIR" >> "$LOG_FILE" 2>&1
+            EXIT_CODE=$?
             
-            if [ $? -eq 0 ]; then
-                echo "[$(date '+%Y-%m-%d %H:%M:%S')] 🧹 Cleaning up raw local spool directory..." >> "$LOG_FILE"
-                # Purge raw slices safely to clear memory for the next scan sequence
+            END_TIME=$(date +%s.%N)
+            RUN_DURATION=$(echo "$END_TIME - $START_TIME" | bc 2>/dev/null || awk "BEGIN {print $END_TIME - $START_TIME}")
+
+            if [ $EXIT_CODE -eq 0 ]; then
                 rm -rf "$WATCH_DIR"/*
-                echo "[$(date '+%Y-%m-%d %H:%M:%S')] 🎉 Volume cycle finalized successfully." | tee -a "$LOG_FILE"
+                # Log success matrix metrics
+                python3 "$METRICS_SCRIPT" "SUCCESS" "$TOTAL_FILES" "$RUN_DURATION"
+                echo "[$(date '+%Y-%m-%d %H:%M:%S')] 🎉 Pipeline processing logged into metrics.json" >> "$LOG_FILE"
             else
-                echo "[$(date '+%Y-%m-%d %H:%M:%S')] ❌ CRITICAL: Multicore pipeline exited with an error status." | tee -a "$LOG_FILE"
-                # Evacuate files to an error workspace block to prevent pipeline lockups
+                echo "[$(date '+%Y-%m-%d %H:%M:%S')] ❌ Pipeline failed. Redirecting to error array." >> "$LOG_FILE"
                 mkdir -p "/workspace/error_spool"
                 mv "$WATCH_DIR"/* "/workspace/error_spool/"
+                
+                # Log failure metrics matrix
+                python3 "$METRICS_SCRIPT" "FAILURE" "$TOTAL_FILES" "$RUN_DURATION" "Pipeline processing error: Exit code $EXIT_CODE"
             fi
-        else
-            echo "[$(date '+%Y-%m-%d %H:%M:%S')] ⏳ Scanner is still actively writing slices to disk. Polling..." >> "$LOG_FILE"
         fi
     fi
-    
-    # Idle poll spacing time
     sleep 3
 done
