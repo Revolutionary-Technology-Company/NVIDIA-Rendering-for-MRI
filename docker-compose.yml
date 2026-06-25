@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  # Edge Listener to ingest local GE/Siemens DICOM instances
+  mri-dicom-router:
+    image: orthanc/orthanc:latest
+    container_name: mri_edge_listener
+    restart: unless-stopped
+    ports:
+      - "11104:104"    # Native DICOM Listening Port
+      - "8042:8042"    # Web Dashboard Management Interface
+    volumes:
+      - ./config/router.json:/etc/orthanc/orthanc.json:ro
+      - mri_spool_volume:/var/lib/orthanc/db
+
+  # GPU Compute Engine containing Triton Inference & Custom Scripts
+  nvidia-mri-compute:
+    image: nvcr.io/nvidia/pytorch:24.01-py3
+    container_name: rtx6000_mri_worker
+    restart: unless-stopped
+    tty: true
+    stdin_open: true
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu] # Exposes RTX 6000 Ada CUDA & Tensor Cores
+    volumes:
+      - .:/workspace/pipeline
+      - mri_spool_volume:/workspace/incoming_dicom:ro
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+      - PYTHONUNBUFFERED=1
+    working_dir: /workspace/pipeline
+    command: /bin/bash -c "pip install pydicom SimpleITK && tail -f /dev/null"
+
+volumes:
+  mri_spool_volume:
+    driver: local
