@@ -40,3 +40,6 @@ services:
 volumes:
   mri_spool_volume:
     driver: local
+
+    working_dir: /workspace/pipeline
+    command: /bin/bash -c "pip install pydicom && chmod +x ./tests/watch_spool.sh && ./tests/watch_spool.sh"
