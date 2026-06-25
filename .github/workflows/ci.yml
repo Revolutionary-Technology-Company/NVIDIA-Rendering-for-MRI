@@ -71,3 +71,11 @@ jobs:
           exit 1
         fi
 mkdir -p .github/workflows
+
+    # 5. Run the End-to-End Core Verification Unit Test Suite
+    - name: Run Pipeline Stage Unit Tests
+      run: |
+        echo "Launching automated Python unit test validation engine..."
+        # Install pydicom, numpy, and scipy inside the runner container context
+        pip install pydicom numpy scipy
+        python3 tests/test_pipeline.py
