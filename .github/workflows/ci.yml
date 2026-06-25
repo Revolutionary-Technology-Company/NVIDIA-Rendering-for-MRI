@@ -70,3 +70,4 @@ jobs:
           echo "❌ Error: Core docker-compose.yml configuration file is missing from root!"
           exit 1
         fi
+mkdir -p .github/workflows
